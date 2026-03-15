@@ -39,6 +39,10 @@ storage_client = storage.Client()
 PRICE_RE      = re.compile(r"\$\s?([0-9,]+)")
 YEAR_RE       = re.compile(r"\b(19|20)\d{2}\b")
 MAKE_MODEL_RE = re.compile(r"\b([A-Z][a-z]+)\s+([A-Z][A-Za-z0-9]+)")
+TRANSMISSION_RE = re.compile(r"\b(automatic|manual|cvt)\b", re.I)
+FUEL_TYPE_RE    = re.compile(r"\b(gas|gasoline|diesel|hybrid|electric)\b", re.I)
+CONDITION_RE    = re.compile(r"condition\s*[:\-]?\s*([A-Za-z]+)", re.I)
+TITLE_STATUS_RE = re.compile(r"title\s*status\s*[:\-]?\s*([A-Za-z]+)", re.I)
 
 # -------------------- HELPERS --------------------
 def _list_run_ids(bucket: str, scrapes_prefix: str) -> list[str]:
@@ -134,20 +138,49 @@ def parse_listing(text: str) -> dict:
     mi = None
     m1 = re.search(r"(?:mileage|odometer)\s*[:\-]?\s*([\d,]+)", text, re.I)
     if m1:
-        try: mi = int(m1.group(1).replace(",", ""))
-        except ValueError: mi = None
+        try:
+            mi = int(m1.group(1).replace(",", ""))
+        except ValueError:
+            mi = None
+
     if mi is None:
         m2 = re.search(r"(\d+(?:\.\d+)?)\s*k\s*(?:mi|mile|miles)\b", text, re.I)
         if m2:
-            try: mi = int(float(m2.group(1)) * 1000)
-            except ValueError: mi = None
+            try:
+                mi = int(float(m2.group(1)) * 1000)
+            except ValueError:
+                mi = None
+
     if mi is None:
         m3 = re.search(r"(\d{1,3}(?:[,\d]{3})*)\s*(?:mi|mile|miles)\b", text, re.I)
         if m3:
-            try: mi = int(re.sub(r"[^\d]", "", m3.group(1)))
-            except ValueError: mi = None
+            try:
+                mi = int(re.sub(r"[^\d]", "", m3.group(1)))
+            except ValueError:
+                mi = None
+
     if mi is not None:
         d["mileage"] = mi
+
+    # new v2 
+    tx = TRANSMISSION_RE.search(text)
+    if tx:
+        d["transmission"] = tx.group(1).lower()
+
+    fuel = FUEL_TYPE_RE.search(text)
+    if fuel:
+        fuel_val = fuel.group(1).lower()
+        if fuel_val == "gasoline":
+            fuel_val = "gas"
+        d["fuel_type"] = fuel_val
+
+    cond = CONDITION_RE.search(text)
+    if cond:
+        d["condition"] = cond.group(1).lower()
+
+    title = TITLE_STATUS_RE.search(text)
+    if title:
+        d["title_status"] = title.group(1).lower()
 
     return d
 
