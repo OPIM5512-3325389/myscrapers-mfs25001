@@ -156,31 +156,39 @@ def _safe_int(x):
 # -------------------- VERTEX AI CALL --------------------
 def _vertex_extract_fields(raw_text: str) -> dict:
     """
-    Ask Gemini to return JSON with exactly: price, year, make, model, mileage.
+    Ask Gemini to return JSON with exactly: price, year, make, model, color, body_type, location, transmission, mileage.
     """
     model = _get_vertex_model()
 
     # Strict JSON schema - FIX: Removed "additionalProperties": False
     schema = {
-        "type": "object",
-        "properties": {
-            "price": {"type": "integer", "nullable": True},
-            "year": {"type": "integer", "nullable": True},
-            "make": {"type": "string", "nullable": True},
-            "model": {"type": "string", "nullable": True},
-            "mileage": {"type": "integer", "nullable": True},
-        },
-        "required": ["price", "year", "make", "model", "mileage"]
-    }
+    "type": "object",
+    "properties": {
+        "price": {"type": "integer", "nullable": True},
+        "year": {"type": "integer", "nullable": True},
+        "make": {"type": "string", "nullable": True},
+        "model": {"type": "string", "nullable": True},
+        "color": {"type": "string", "nullable": True},
+        "body_type": {"type": "string", "nullable": True},
+        "location": {"type": "string", "nullable": True},
+        "transmission": {"type": "string", "nullable": True},
+        "mileage": {"type": "integer", "nullable": True},
+    },
+    "required": ["price", "year", "make", "model", "mileage"]
+}
 
     # System instruction (will be prepended to the prompt)
     sys_instr = (
-        "Extract ONLY the following fields from the input text. "
-        "Return a strict JSON object that conforms to the provided schema. "
-        "If a value is not present, use null. "
-        "Rules: integers for price/year/mileage; price in USD; mileage in miles; "
-        "do not infer values not explicitly present; do not add extra keys."
-    )
+    "Extract ONLY the following fields from the input text. "
+    "Return a strict JSON object that conforms to the provided schema. "
+    "If a value is not present, use null. "
+    "Rules: integers for price/year/mileage; price in USD; mileage in miles. "
+    "Transmission can be automatic or manual, or null if not listed. "
+    "Color is the exterior car color, such as black, white, silver, gray, red, blue, green, or similar. "
+    "Body type should be something like sedan, SUV, coupe, hatchback, wagon, van, truck, convertible, or null if not explicitly present. "
+    "Location should be the city/state/zip if explicitly present in the listing text; otherwise use null. "
+    "Do not infer values not explicitly present and do not add extra keys."
+)
 
     # FIX: Combine instruction and text into one prompt string (SDK compatibility)
     prompt = f"{sys_instr}\n\nTEXT:\n{raw_text}"
@@ -230,6 +238,10 @@ def _vertex_extract_fields(raw_text: str) -> dict:
 
     parsed["make"] = _norm_str(parsed.get("make"))
     parsed["model"] = _norm_str(parsed.get("model"))
+    parsed["color"] = _norm_str(parsed.get("color"))
+    parsed["body_type"] = _norm_str(parsed.get("body_type"))
+    parsed["location"] = _norm_str(parsed.get("location"))
+    parsed["transmission"] = _norm_str(parsed.get("transmission"))
 
     return parsed
 
@@ -318,6 +330,10 @@ def llm_extract_http(request: Request):
                 "make": parsed.get("make"),
                 "model": parsed.get("model"),
                 "mileage": parsed.get("mileage"),
+                "transmission": parsed.get("transmission"),
+                "color": parsed.get("color"),
+                "body_type": parsed.get("body_type"),
+                "location": parsed.get("location"),
                 "llm_provider": "vertex",
                 "llm_model": LLM_MODEL,
                 "llm_ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
