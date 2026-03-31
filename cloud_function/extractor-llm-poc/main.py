@@ -184,7 +184,7 @@ def _vertex_extract_fields(raw_text: str) -> dict:
     "If a value is not present, use null. "
     "Rules: integers for price/year/mileage; price in USD; mileage in miles. "
     "Transmission can be automatic or manual, or null if not listed. "
-    "Color is the exterior car color, such as black, white, silver, gray, red, blue, green, or similar. "
+    "Color is the exterior vehicle color. Accept values explicitly stated as color, paint color, exterior color, finish, or similar wording. Examples include black, white, silver, gray, red, blue, green, and metallic variants. If not explicitly present, use null. "
     "Body type should be something like sedan, SUV, coupe, hatchback, wagon, van, truck, convertible, or null if not explicitly present. "
     "Location should be the city/state/zip if explicitly present in the listing text; otherwise use null. "
     "Do not infer values not explicitly present and do not add extra keys."
