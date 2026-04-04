@@ -2,10 +2,6 @@ name: Sync model outputs from GCS to GitHub
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths:
-      - '.github/workflows/sync-data.yml'
 
 permissions:
   contents: write
@@ -21,9 +17,12 @@ env:
 jobs:
   sync:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Auth to Google Cloud (WIF)
         uses: google-github-actions/auth@v2
@@ -39,11 +38,11 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
 
       - name: Ensure results folders exist
+        shell: bash
         run: |
-          mkdir -p results/preds
-          mkdir -p results/metrics
-          mkdir -p results/importance
-          mkdir -p results/pdp
+          set -euo pipefail
+          mkdir -p results/preds results/metrics results/importance results/pdp
+          ls -R results
 
       - name: Find latest results hour
         id: latest
@@ -51,7 +50,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          LATEST_HOUR=$(gcloud storage ls "gs://${BUCKET_NAME}/structured/results_llm/" | sed 's#/$##' | awk -F/ '{print $NF}' | sort | tail -n1)
+          gcloud storage ls "gs://${BUCKET_NAME}/structured/results_llm/" > hours.txt
+          cat hours.txt
+
+          LATEST_HOUR=$(sed 's#/$##' hours.txt | awk -F/ '{print $NF}' | sort | tail -n1)
 
           if [[ -z "${LATEST_HOUR}" ]]; then
             echo "No results folders found in structured/results_llm/"
@@ -67,23 +69,20 @@ jobs:
           set -euo pipefail
 
           HOUR="${{ steps.latest.outputs.latest_hour }}"
+          echo "Syncing hour: ${HOUR}"
 
-          # Predictions
           gcloud storage cp \
             "gs://${BUCKET_NAME}/structured/preds_llm/${HOUR}/preds.csv" \
             "results/preds/${HOUR}_preds.csv"
 
-          # Metrics
           gcloud storage cp \
             "gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/metrics.csv" \
             "results/metrics/${HOUR}_metrics.csv"
 
-          # Permutation importance
           gcloud storage cp \
             "gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/permutation_importance.csv" \
             "results/importance/${HOUR}_permutation_importance.csv"
 
-          # PDP files (copy if they exist)
           for feat in year_num mileage_num make; do
             SRC="gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/pdp_${feat}.csv"
             DEST="results/pdp/${HOUR}_pdp_${feat}.csv"
@@ -91,6 +90,8 @@ jobs:
               gcloud storage cp "$SRC" "$DEST"
             fi
           done
+
+          ls -R results
 
       - name: Commit and push synced files
         shell: bash
@@ -107,5 +108,6 @@ jobs:
             exit 0
           fi
 
+          git status
           git commit -m "Sync latest model outputs from GCS"
-          git push
+          git push origin HEAD:main
