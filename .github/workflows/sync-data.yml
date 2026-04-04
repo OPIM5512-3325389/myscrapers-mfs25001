@@ -1,0 +1,111 @@
+name: Sync model outputs from GCS to GitHub
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/sync-data.yml'
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  PROJECT_ID: ${{ vars.PROJECT_ID }}
+  REGION: ${{ vars.REGION }}
+  BUCKET_NAME: ${{ vars.BUCKET_NAME }}
+  DEPLOYER_SA: ${{ vars.DEPLOYER_SA }}
+  WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Auth to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Ensure results folders exist
+        run: |
+          mkdir -p results/preds
+          mkdir -p results/metrics
+          mkdir -p results/importance
+          mkdir -p results/pdp
+
+      - name: Find latest results hour
+        id: latest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LATEST_HOUR=$(gcloud storage ls "gs://${BUCKET_NAME}/structured/results_llm/" | sed 's#/$##' | awk -F/ '{print $NF}' | sort | tail -n1)
+
+          if [[ -z "${LATEST_HOUR}" ]]; then
+            echo "No results folders found in structured/results_llm/"
+            exit 1
+          fi
+
+          echo "latest_hour=${LATEST_HOUR}" >> "$GITHUB_OUTPUT"
+          echo "Latest hour: ${LATEST_HOUR}"
+
+      - name: Copy latest artifacts from GCS
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HOUR="${{ steps.latest.outputs.latest_hour }}"
+
+          # Predictions
+          gcloud storage cp \
+            "gs://${BUCKET_NAME}/structured/preds_llm/${HOUR}/preds.csv" \
+            "results/preds/${HOUR}_preds.csv"
+
+          # Metrics
+          gcloud storage cp \
+            "gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/metrics.csv" \
+            "results/metrics/${HOUR}_metrics.csv"
+
+          # Permutation importance
+          gcloud storage cp \
+            "gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/permutation_importance.csv" \
+            "results/importance/${HOUR}_permutation_importance.csv"
+
+          # PDP files (copy if they exist)
+          for feat in year_num mileage_num make; do
+            SRC="gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/pdp_${feat}.csv"
+            DEST="results/pdp/${HOUR}_pdp_${feat}.csv"
+            if gcloud storage ls "$SRC" >/dev/null 2>&1; then
+              gcloud storage cp "$SRC" "$DEST"
+            fi
+          done
+
+      - name: Commit and push synced files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add results/
+
+          if git diff --cached --quiet; then
+            echo "No new files to commit."
+            exit 0
+          fi
+
+          git commit -m "Sync latest model outputs from GCS"
+          git push
