@@ -2,6 +2,8 @@ name: Sync model outputs from GCS to GitHub
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '50 * * * *'
 
 permissions:
   contents: write
@@ -63,7 +65,22 @@ jobs:
           echo "latest_hour=${LATEST_HOUR}" >> "$GITHUB_OUTPUT"
           echo "Latest hour: ${LATEST_HOUR}"
 
+      - name: Skip if this hour already synced
+        id: check_existing
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOUR="${{ steps.latest.outputs.latest_hour }}"
+
+          if [[ -f "results/metrics/${HOUR}_metrics.csv" ]]; then
+            echo "already_synced=true" >> "$GITHUB_OUTPUT"
+            echo "Hour ${HOUR} already synced. Exiting cleanly."
+          else
+            echo "already_synced=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Copy latest artifacts from GCS
+        if: steps.check_existing.outputs.already_synced == 'false'
         shell: bash
         run: |
           set -euo pipefail
@@ -94,6 +111,7 @@ jobs:
           ls -R results
 
       - name: Commit and push synced files
+        if: steps.check_existing.outputs.already_synced == 'false'
         shell: bash
         run: |
           set -euo pipefail
