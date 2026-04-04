@@ -156,7 +156,7 @@ def train_dt_http(request):
             max_depth=int(body.get("max_depth", 12)),
             min_samples_leaf=int(body.get("min_samples_leaf", 10)),
         )
-        code = 200 if result.get("status") == "ok" else 204
+        code = 200
         return (json.dumps(result), code, {"Content-Type": "application/json"})
     except Exception as e:
         logging.error("Error: %s", e)
