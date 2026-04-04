@@ -43,7 +43,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p results/preds results/metrics results/importance results/pdp
+          mkdir -p results/preds
+          mkdir -p results/metrics
+          mkdir -p results/importance
+          mkdir -p results/pdp
           ls -R results
 
       - name: Find latest results hour
@@ -88,21 +91,27 @@ jobs:
           HOUR="${{ steps.latest.outputs.latest_hour }}"
           echo "Syncing hour: ${HOUR}"
 
+          # Predictions
           gcloud storage cp \
             "gs://${BUCKET_NAME}/structured/preds_llm/${HOUR}/preds.csv" \
             "results/preds/${HOUR}_preds.csv"
 
+          # Metrics
           gcloud storage cp \
             "gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/metrics.csv" \
             "results/metrics/${HOUR}_metrics.csv"
 
+          # Permutation importance
           gcloud storage cp \
             "gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/permutation_importance.csv" \
             "results/importance/${HOUR}_permutation_importance.csv"
 
+          # PDP files -> folder by hour
+          mkdir -p "results/pdp/${HOUR}"
+
           for feat in year_num mileage_num make; do
             SRC="gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/pdp_${feat}.csv"
-            DEST="results/pdp/${HOUR}_pdp_${feat}.csv"
+            DEST="results/pdp/${HOUR}/pdp_${feat}.csv"
             if gcloud storage ls "$SRC" >/dev/null 2>&1; then
               gcloud storage cp "$SRC" "$DEST"
             fi
