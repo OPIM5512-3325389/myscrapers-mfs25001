@@ -12,14 +12,15 @@ from sklearn.impute import SimpleImputer
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.inspection import permutation_importance
 
 # ---- ENV ----
-PROJECT_ID     = os.getenv("PROJECT_ID", "")
-GCS_BUCKET     = os.getenv("GCS_BUCKET", "")
-DATA_KEY       = os.getenv("DATA_KEY", "structured/datasets/listings_master.csv")
-OUTPUT_PREFIX  = os.getenv("OUTPUT_PREFIX", "preds")
-TIMEZONE       = os.getenv("TIMEZONE", "America/New_York")
-LOG_LEVEL      = os.getenv("LOG_LEVEL", "INFO")
+PROJECT_ID = os.getenv("PROJECT_ID", "")
+GCS_BUCKET = os.getenv("GCS_BUCKET", "")
+DATA_KEY = os.getenv("DATA_KEY", "structured/datasets/listings_master.csv")
+OUTPUT_PREFIX = os.getenv("OUTPUT_PREFIX", "preds")
+TIMEZONE = os.getenv("TIMEZONE", "America/New_York")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -71,7 +72,10 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
     logging.info("Rows total=%d | with valid numeric price=%d", orig_rows, valid_price_rows)
 
     counts = df["date_local"].value_counts().sort_index()
-    logging.info("Recent date counts (local): %s", json.dumps({str(k): int(v) for k, v in counts.tail(8).items()}))
+    logging.info(
+        "Recent date counts (local): %s",
+        json.dumps({str(k): int(v) for k, v in counts.tail(8).items()})
+    )
 
     unique_dates = sorted(d for d in df["date_local"].dropna().unique())
 
@@ -88,7 +92,11 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
         dropped_for_target = int((df["date_local"] < today_local).sum()) - int(len(train_df))
 
         logging.info("Using time-based split")
-        logging.info("Train rows after target clean: %d (dropped_for_target=%d)", len(train_df), dropped_for_target)
+        logging.info(
+            "Train rows after target clean: %d (dropped_for_target=%d)",
+            len(train_df),
+            dropped_for_target,
+        )
         logging.info("Holdout rows today (%s): %d", today_local, len(holdout_df))
 
         if len(train_df) < 40:
@@ -132,23 +140,50 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
     pre = ColumnTransformer(
         transformers=[
             ("num", SimpleImputer(strategy="median"), num_cols),
-            ("cat", Pipeline([
-                ("imp", SimpleImputer(strategy="most_frequent")),
-                ("oh", OneHotEncoder(handle_unknown="ignore"))
-            ]), cat_cols),
+            (
+                "cat",
+                Pipeline([
+                    ("imp", SimpleImputer(strategy="most_frequent")),
+                    ("oh", OneHotEncoder(handle_unknown="ignore")),
+                ]),
+                cat_cols,
+            ),
         ]
     )
 
     model = DecisionTreeRegressor(
         max_depth=max_depth,
         min_samples_leaf=min_samples_leaf,
-        random_state=42
+        random_state=42,
     )
     pipe = Pipeline([("pre", pre), ("model", model)])
 
     X_train = train_df[feats]
     y_train = train_df[target]
     pipe.fit(X_train, y_train)
+
+    # ---- Permutation importance on holdout ----
+    importance_df = pd.DataFrame()
+    if not holdout_df.empty:
+        X_imp = holdout_df[feats].copy()
+        y_imp = holdout_df["price_num"].copy()
+        imp_mask = y_imp.notna()
+
+        if imp_mask.any():
+            result_imp = permutation_importance(
+                pipe,
+                X_imp[imp_mask],
+                y_imp[imp_mask],
+                n_repeats=5,
+                random_state=42,
+                scoring="neg_mean_absolute_error",
+            )
+
+            importance_df = pd.DataFrame({
+                "feature": feats,
+                "importance_mean": result_imp.importances_mean,
+                "importance_std": result_imp.importances_std,
+            }).sort_values("importance_mean", ascending=False)
 
     # ---- Predict/evaluate on holdout ----
     mae_today = None
@@ -182,7 +217,12 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
                 mape_mask = y_true_valid > 0
                 if mape_mask.any():
                     mape_today = float(
-                        (np.abs((y_true_valid[mape_mask] - y_hat_valid[mape_mask]) / y_true_valid[mape_mask])).mean() * 100.0
+                        (
+                            np.abs(
+                                (y_true_valid[mape_mask] - y_hat_valid[mape_mask])
+                                / y_true_valid[mape_mask]
+                            )
+                        ).mean() * 100.0
                     )
 
     # --- Output path: HOURLY folder structure ---
@@ -191,6 +231,7 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
 
     out_key = f"{OUTPUT_PREFIX}/{hour_key}/preds.csv"
     metrics_key = f"structured/results_llm/{hour_key}/metrics.csv"
+    importance_key = f"structured/results_llm/{hour_key}/permutation_importance.csv"
 
     metrics_df = pd.DataFrame([{
         "run_ts_utc": now_utc.isoformat(),
@@ -211,11 +252,20 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
     if not dry_run and len(preds_df) > 0:
         _write_csv_to_gcs(client, GCS_BUCKET, out_key, preds_df)
         _write_csv_to_gcs(client, GCS_BUCKET, metrics_key, metrics_df)
+
+        if not importance_df.empty:
+            _write_csv_to_gcs(client, GCS_BUCKET, importance_key, importance_df)
+
         logging.info("Wrote predictions to gs://%s/%s (%d rows)", GCS_BUCKET, out_key, len(preds_df))
         logging.info("Wrote metrics to gs://%s/%s", GCS_BUCKET, metrics_key)
+
+        if not importance_df.empty:
+            logging.info("Wrote permutation importance to gs://%s/%s", GCS_BUCKET, importance_key)
     else:
         logging.info("Dry run or no holdout rows; skip write. Would write preds to gs://%s/%s", GCS_BUCKET, out_key)
         logging.info("Dry run or no holdout rows; skip write. Would write metrics to gs://%s/%s", GCS_BUCKET, metrics_key)
+        if not importance_df.empty:
+            logging.info("Dry run or no holdout rows; would write permutation importance to gs://%s/%s", GCS_BUCKET, importance_key)
 
     return {
         "status": "ok",
@@ -230,6 +280,7 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
         "bias_today": bias_today,
         "output_key": out_key,
         "metrics_key": metrics_key,
+        "importance_key": importance_key,
         "dry_run": dry_run,
         "timezone": TIMEZONE,
     }
