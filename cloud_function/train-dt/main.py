@@ -13,6 +13,7 @@ from sklearn.tree import DecisionTreeRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.inspection import permutation_importance
+from sklearn.inspection import partial_dependence
 
 # ---- ENV ----
 PROJECT_ID = os.getenv("PROJECT_ID", "")
@@ -184,7 +185,41 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
                 "importance_mean": result_imp.importances_mean,
                 "importance_std": result_imp.importances_std,
             }).sort_values("importance_mean", ascending=False)
+    # ---- Partial Dependence (export raw data for 3 features) ----
+    pdp_frames = {}
 
+    if not holdout_df.empty:
+        pdp_candidates = ["year_num", "mileage_num", "make"]
+
+        for feat in pdp_candidates:
+            if feat not in feats:
+                continue
+
+            X_pdp = holdout_df[feats].copy()
+            y_pdp = holdout_df["price_num"].copy()
+            pdp_mask = y_pdp.notna()
+
+            if not pdp_mask.any():
+                continue
+
+            try:
+                pd_result = partial_dependence(
+                    pipe,
+                    X_pdp[pdp_mask],
+                    features=[feat],
+                    kind="average",
+                )
+
+                grid_vals = pd_result["grid_values"][0]
+                avg_vals = pd_result["average"][0]
+
+                pdp_frames[feat] = pd.DataFrame({
+                    "feature": feat,
+                    "grid_value": grid_vals,
+                    "pred_mean": avg_vals,
+                })
+            except Exception as e:
+                logging.warning("Skipping PDP for feature %s due to error: %s", feat, e)
     # ---- Predict/evaluate on holdout ----
     mae_today = None
     rmse_today = None
@@ -232,6 +267,10 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
     out_key = f"{OUTPUT_PREFIX}/{hour_key}/preds.csv"
     metrics_key = f"structured/results_llm/{hour_key}/metrics.csv"
     importance_key = f"structured/results_llm/{hour_key}/permutation_importance.csv"
+    pdp_keys = {
+        feat: f"structured/results_llm/{hour_key}/pdp_{feat}.csv"
+        for feat in pdp_frames.keys()
+    }
 
     metrics_df = pd.DataFrame([{
         "run_ts_utc": now_utc.isoformat(),
@@ -256,16 +295,26 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
         if not importance_df.empty:
             _write_csv_to_gcs(client, GCS_BUCKET, importance_key, importance_df)
 
+        for feat, pdp_df in pdp_frames.items():
+            _write_csv_to_gcs(client, GCS_BUCKET, pdp_keys[feat], pdp_df)
+
         logging.info("Wrote predictions to gs://%s/%s (%d rows)", GCS_BUCKET, out_key, len(preds_df))
         logging.info("Wrote metrics to gs://%s/%s", GCS_BUCKET, metrics_key)
 
         if not importance_df.empty:
             logging.info("Wrote permutation importance to gs://%s/%s", GCS_BUCKET, importance_key)
+
+        for feat in pdp_frames.keys():
+            logging.info("Wrote PDP to gs://%s/%s", GCS_BUCKET, pdp_keys[feat])
     else:
         logging.info("Dry run or no holdout rows; skip write. Would write preds to gs://%s/%s", GCS_BUCKET, out_key)
         logging.info("Dry run or no holdout rows; skip write. Would write metrics to gs://%s/%s", GCS_BUCKET, metrics_key)
+
         if not importance_df.empty:
             logging.info("Dry run or no holdout rows; would write permutation importance to gs://%s/%s", GCS_BUCKET, importance_key)
+
+        for feat in pdp_frames.keys():
+            logging.info("Dry run or no holdout rows; would write PDP to gs://%s/%s", GCS_BUCKET, pdp_keys[feat])
 
     return {
         "status": "ok",
@@ -281,10 +330,10 @@ def run_once(dry_run: bool = False, max_depth: int = 12, min_samples_leaf: int =
         "output_key": out_key,
         "metrics_key": metrics_key,
         "importance_key": importance_key,
+        "pdp_keys": pdp_keys,
         "dry_run": dry_run,
         "timezone": TIMEZONE,
     }
-
 
 def train_dt_http(request):
     try:
