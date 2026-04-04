@@ -91,22 +91,18 @@ jobs:
           HOUR="${{ steps.latest.outputs.latest_hour }}"
           echo "Syncing hour: ${HOUR}"
 
-          # Predictions
           gcloud storage cp \
             "gs://${BUCKET_NAME}/structured/preds_llm/${HOUR}/preds.csv" \
             "results/preds/${HOUR}_preds.csv"
 
-          # Metrics
           gcloud storage cp \
             "gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/metrics.csv" \
             "results/metrics/${HOUR}_metrics.csv"
 
-          # Permutation importance
           gcloud storage cp \
             "gs://${BUCKET_NAME}/structured/results_llm/${HOUR}/permutation_importance.csv" \
             "results/importance/${HOUR}_permutation_importance.csv"
 
-          # PDP files -> folder by hour
           mkdir -p "results/pdp/${HOUR}"
 
           for feat in year_num mileage_num make; do
@@ -130,6 +126,10 @@ jobs:
 
           rm -f gha-creds-*.json hours.txt || true
 
+          git fetch origin main
+          git checkout main
+          git pull --rebase origin main
+
           git add results/
 
           if git diff --cached --quiet; then
@@ -139,8 +139,4 @@ jobs:
 
           git status
           git commit -m "Sync latest model outputs from GCS"
-
-          git fetch origin main
-          git pull --rebase origin main
-
-          git push origin HEAD:main
+          git push origin main
