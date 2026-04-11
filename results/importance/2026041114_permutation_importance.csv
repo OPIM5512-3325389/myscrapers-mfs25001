@@ -1,0 +1,9 @@
+feature,importance_mean,importance_std
+mileage_num,825.6354920634916,286.2039348068479
+year_num,589.2296459096455,133.03545046505664
+body_type,16.182857142857028,19.819871290176888
+make,0.0,0.0
+color,0.0,0.0
+transmission,0.0,0.0
+model,0.0,0.0
+location,0.0,0.0
