@@ -1,0 +1,2 @@
+run_ts_utc,today_local,split_mode,train_rows,holdout_rows,valid_price_rows,mae,rmse,mape,bias,dry_run,timezone,model_name
+2026-04-17T06:20:16.294468+00:00,2026-04-17,time_based,76,92,162,8085.67396934461,13168.423971191023,70.40382885388291,-810.1362667371391,False,America/New_York,decision_tree_llm_v1
